@@ -27,15 +27,15 @@ const config = require('./config');
   const totalAccounts = allAccounts.length;
 
   // 4) Số worker (số luồng song song)
-  const WORKER_COUNT = 3;
+  const WORKER_COUNT = 1;
 
-  // 5) Hàm worker: mỗi worker sẽ lấy batch 10 account, rồi tuần tự xử lý
+  // 5) Hàm worker: mỗi worker sẽ lấy batch 5 account, rồi tuần tự xử lý
   async function worker(workerId) {
     while (true) {
-      // 5.a) Lấy 10 tài khoản kế tiếp
+      // 5.a) Lấy 5 tài khoản kế tiếp
       if (nextIndex >= totalAccounts) break;
       const start = nextIndex;
-      const end = Math.min(start + 8, totalAccounts);
+      const end = Math.min(start + 1, totalAccounts);
       const batch = allAccounts.slice(start, end);
       nextIndex = end; // Cập nhật hàng đợi
 
@@ -45,19 +45,21 @@ const config = require('./config');
 
       // 5.b) Duyệt từng account trong batch (mỗi account sẽ khởi browser riêng)
       for (const acct of batch) {
-        const proxy = acct.proxy;
-        const host = proxy.host;
-        const port = proxy.port;
-        const proto = proxy.protocol.toLowerCase();
+        const proxy = acct.proxy || {};
+        const host = proxy.host || '';
+        const port = proxy.port || '';
+        const proto = (proxy.protocol || 'http').toLowerCase();
+
         let proxyUser = '',
           proxyPass = '';
-        try {
-          proxyUser = decrypt(proxy.username);
-          proxyPass = decrypt(proxy.password);
-        } catch {
-          // Nếu không mã hoá, giữ nguyên
-          proxyUser = proxy.username;
-          proxyPass = proxy.password;
+        if (proxy.username && proxy.password) {
+          try {
+            proxyUser = decrypt(proxy.username);
+            proxyPass = decrypt(proxy.password);
+          } catch {
+            proxyUser = proxy.username;
+            proxyPass = proxy.password;
+          }
         }
 
         const email = acct.email;
@@ -69,42 +71,46 @@ const config = require('./config');
         }
 
         console.log(
-          `[Worker ${workerId}] → Chạy cho ${email} via ${host}:${port}`
+          `[Worker ${workerId}] → Chạy cho ${email}` +
+            (host && port ? ` via proxy ${host}:${port}` : ' (không proxy)')
         );
 
-        // 5.c) Launch browser mới với proxy của account này
+        // 5.c) Chuẩn bị args cho launch
+        const launchArgs = ['--start-maximized'];
+        if (host && port) {
+          launchArgs.unshift(`--proxy-server=${proto}://${host}:${port}`);
+        }
+
+        // 5.d) Launch browser mới
         const browser = await puppeteer.launch({
           headless: false,
           defaultViewport: null,
-          executablePath: config.EDGE_PATH || undefined, // nếu cần dùng Edge
-          args: [
-            `--proxy-server=${proto}://${host}:${port}`,
-            '--start-maximized',
-          ],
-          // Tăng timeout nếu cần tránh ProtocolError
+          executablePath: config.EDGE_PATH || undefined,
+          args: launchArgs,
           protocolTimeout: 600000,
         });
 
         const page = await browser.newPage();
-        // Nếu proxy yêu cầu auth
-        if (proxyUser && proxyPass) {
+
+        // Nếu có proxyUser & proxyPass, authenticate
+        if (host && port && proxyUser && proxyPass) {
           await page.authenticate({ username: proxyUser, password: proxyPass });
           console.log(`[Worker ${workerId}] [Proxy] Authenticated`);
         }
 
         try {
-          // 5.d) Chạy flow login → openRewards → processOffers → bingSearch
+          // 5.e) Chạy flow login → openRewards → processOffers → bingSearch
           await login(page, email, emailPwd);
           await openRewards(page);
           await processOffers(page);
-          await bingSearch(page);
+          await bingSearch(page, acct);
 
-          // 5.e) Đánh dấu complete=true khi thành công
+          // 5.f) Đánh dấu complete=true khi thành công
           await ProxyAccount.updateOne({ email }, { complete: true });
           console.log(`[Worker ${workerId}] ✔ ${email} hoàn thành`);
         } catch (err) {
           console.error(`[Worker ${workerId}] ❌ ${email} lỗi:`, err.message);
-          // Nếu lỗi liên quan proxy (vd: unable to connect), đánh dấu proxyAlive=false
+          // Nếu lỗi liên quan proxy, đánh dấu proxyAlive=false
           await ProxyAccount.updateOne({ email }, { proxyAlive: false });
         } finally {
           await browser.close();

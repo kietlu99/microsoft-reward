@@ -84,9 +84,9 @@ module.exports = async function processOffers(page) {
 
   // PHẦN 3: Secondary Offers – tự động điều chỉnh start index
   const possibleContainers = [
-    '#bingRewards > div > div:nth-child(6)',
-    '#bingRewards > div > div:nth-child(7)',
     '#bingRewards > div > div:nth-child(8)',
+    '#bingRewards > div > div:nth-child(7)',
+    '#bingRewards > div > div:nth-child(6)',
     '#bingRewards > div > div.flyout_control_halfUnit',
   ];
 

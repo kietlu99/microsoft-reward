@@ -60,7 +60,7 @@ const { MONGO_URI } = require('./config');
       await login(page, email, emailPwd);
       await openRewards(page);
       await processOffers(page);
-      await bingSearch(page);
+      await bingSearch(page, acct);
       console.log(`[OK] Completed for ${email}`);
     } catch (err) {
       console.error(`[ERR] Failed for ${email}:`, err);

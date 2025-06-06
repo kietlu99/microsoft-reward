@@ -31,15 +31,18 @@ const proxyAccountSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  // Thêm trường 'complete' cho biết tài khoản đã hoàn thành hay chưa
   complete: {
     type: Boolean,
     default: false,
   },
-  // Thêm trường 'proxyAlive' cho biết proxy còn hoạt động hay đã chết
   proxyAlive: {
     type: Boolean,
     default: true,
+  },
+  // Mảng lưu các từ khóa đã search (mỗi phần tử là 1 string)
+  searchedKeywords: {
+    type: [String],
+    default: [],
   },
 });
 

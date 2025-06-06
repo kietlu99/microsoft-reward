@@ -1,40 +1,9 @@
+const { generateRandomKeywords } = require('../utils/keywordGenerator');
+const ProxyAccount = require('../db/ProxyAccount');
 const { SEARCH_INPUT } = require('../config');
 const { delay, log } = require('../utils');
 
-const keywords = [
-  'galaxy',
-  'shadow',
-  'silence',
-  'thunder',
-  'mist',
-  'fog',
-  'cave',
-  'path',
-  'journey',
-  'freedom',
-  'courage',
-  'magic',
-  'mystery',
-  'secret',
-  'whisper',
-  'echo',
-  'flame',
-  'crystal',
-  'pearl',
-  'shell',
-  'wave',
-  'breeze',
-  'chill',
-  'spark',
-  'lantern',
-  'feather',
-  'root',
-  'nest',
-  'stone',
-  'trail',
-];
-
-module.exports = async function bingSearch(page) {
+module.exports = async function bingSearch(page, account) {
   try {
     // 1. Kiểm tra phần tử thông báo điểm
     const rewardSelector =
@@ -60,24 +29,55 @@ module.exports = async function bingSearch(page) {
     );
   }
 
-  // 2. Nếu chưa đạt điểm, thực hiện tìm kiếm như thường
+  const already = account.searchedKeywords || [];
+  const TARGET = 3;
+  let candidates = [];
+
+  // 1) Sinh dư đôi, sau đó loại trùng với already
+  while (candidates.length < TARGET) {
+    // Lấy 2× so lượng cần để dễ lọc trùng
+    const more = generateRandomKeywords(TARGET * 2);
+    for (const w of more) {
+      if (
+        candidates.length < TARGET &&
+        !already.includes(w) &&
+        !candidates.includes(w)
+      ) {
+        candidates.push(w);
+      }
+    }
+  }
+
+  log(`[${account.email}] 🔑 Từ khóa sinh tự động:`, candidates);
+
   await page.goto('https://www.bing.com', { waitUntil: 'networkidle2' });
 
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < candidates.length; i++) {
+    const kw = candidates[i];
+
     await page.waitForSelector(SEARCH_INPUT);
     await page.click(SEARCH_INPUT, { clickCount: 3 }, { delay: 1000 });
-    await page.type(SEARCH_INPUT, keywords[i], { delay: 500 });
+    await page.type(SEARCH_INPUT, kw, { delay: 500 });
     await page.keyboard.press('Enter');
     await page.waitForNavigation({ waitUntil: 'networkidle2' });
+    log(`[${account.email}] 🔍 Searched: ${kw}`);
 
-    log(`Searched: ${keywords[i]}`);
+    // Cập nhật vào DB ngay sau khi tìm xong
+    await ProxyAccount.updateOne(
+      { email: account.email },
+      { $push: { searchedKeywords: kw } }
+    );
 
-    // if ((i + 1) % 4 === 0 && i < keywords.length - 1) {
-    //   log('⏸️ Đã tìm 4 từ khóa, nghỉ 15 phút...');
-    //   await delay(15 * 60 * 1000); // 15 phút
-    // } else if (i < keywords.length - 1) {
-    //   await delay(3000); // Delay giữa các từ khóa khác
+    // // Chờ sau mỗi 4 từ: 15 phút, các lần khác: 3s
+    // if ((i + 1) % 4 === 0 && i < candidates.length - 1) {
+    //   log(`[${account.email}] ⏸️ Đã tìm ${i + 1} từ, nghỉ 15 phút...`);
+    //   await delay(15 * 60 * 1000);
+    // } else if (i < candidates.length - 1) {
+    //   await delay(3000);
     // }
+
+    await delay(7000);
   }
-  k;
+
+  log(`[${account.email}] ✅ Hoàn tất 30 từ khóa`);
 };
