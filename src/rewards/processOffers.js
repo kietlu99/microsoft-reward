@@ -83,6 +83,7 @@ module.exports = async function processOffers(page) {
   }
 
   // PHẦN 3: Secondary Offers – tự động điều chỉnh start index
+  // PHẦN 3: Secondary Offers – tự động tìm container chứa các offers phù hợp
   const possibleContainers = [
     '#bingRewards > div > div:nth-child(8)',
     '#bingRewards > div > div:nth-child(7)',
@@ -90,9 +91,30 @@ module.exports = async function processOffers(page) {
     '#bingRewards > div > div.flyout_control_halfUnit',
   ];
 
-  let containerSelector;
+  let containerSelector = null;
+
+  // 1) Tìm container đầu tiên chứa các div con với aria phù hợp
   for (const sel of possibleContainers) {
-    if (await page.$(sel)) {
+    // Lấy tất cả div con
+    const divs = await page.$$(sel + ' > div');
+    console.log(divs);
+    let found = false;
+
+    for (let i = 0; i < divs.length; i++) {
+      const aria = await divs[i].evaluate(
+        (el) => el.getAttribute('aria-label')?.trim() || ''
+      );
+      const hasA = (await divs[i].$('a')) !== null;
+      if (
+        (aria === 'Offer not Completed' || aria === 'Offer is Completed') &&
+        hasA
+      ) {
+        found = true;
+        break;
+      }
+    }
+
+    if (found) {
       containerSelector = sel;
       log(`▶️ Dùng SECONDARY_OFFERS_CONTAINER = ${sel}`);
       break;
@@ -100,79 +122,58 @@ module.exports = async function processOffers(page) {
   }
 
   if (!containerSelector) {
-    log('⚠️ Không tìm thấy bất kỳ secondary offers container nào.');
+    log(
+      '⚠️ Không tìm thấy bất kỳ secondary offers container nào có offer phù hợp.'
+    );
   } else {
-    // Kiểm tra có exclusive promo (nằm ở div:nth-child(1) trong container này) không
-    const hasExclusive = Boolean(
-      await page.$(`${EXCLUSIVE_CONTAINER_SELECTOR}`)
-    );
-    const startIdx = hasExclusive ? 3 : 1;
-    log(`▶️ hasExclusive=${hasExclusive}, startIdx=${startIdx}`);
-
-    // Đếm tổng số div con
-    const total = await page.$$eval(
-      `${containerSelector} > div`,
-      (divs) => divs.length
-    );
-    log(`▶️ Có tổng cộng ${total} div trong container`);
-
-    // Loop từ startIdx tới total
-    for (let idx = startIdx; idx <= total; idx++) {
-      const offerDiv = `${containerSelector} > div:nth-child(${startIdx})`;
-      try {
-        await page.waitForSelector(offerDiv, { timeout: 5000 });
-        const aria = await page.$eval(
-          offerDiv,
-          (el) => el.getAttribute('aria-label')?.trim() || ''
-        );
-        log(`• Offer child #${idx}: aria-label="${aria}"`);
-
-        if (aria === 'Offer not Completed') {
-          const linkSel = `${offerDiv} > a`;
-          await page.waitForSelector(linkSel, { timeout: 5000 });
-
-          const { href, target } = await page.$eval(linkSel, (a) => ({
-            href: a.href,
-            target: a.target,
-          }));
-          log(`▶️ OfferNotCompleted child #${idx}: ${href} (target=${target})`);
-
-          if (target === '_blank') {
-            // 1) Click vào link, tab mới sẽ tự động mở
-            await page.click(linkSel);
-
-            // 2) Lấy danh sách tất cả trang, tab mới thường là tab cuối cùng
-            const pages = await browser.pages();
-            const newTab = pages[pages.length - 1];
-
-            await delay(5000);
-
-            // 3) Đóng tab mới ngay lập tức
-            await newTab.close();
-
-            // 4) Đảm bảo focus quay lại tab chính
-            await page.bringToFront();
-
-            log(`🔒 Đã đóng tab mới sau khi click: ${href}`);
-          } else {
-            await Promise.all([
-              page.waitForNavigation({ waitUntil: 'networkidle2' }),
-              page.click(linkSel),
-            ]);
-            log(`✅ Vào offer same-tab: ${href}`);
-            await delay(5000);
-            await page.goBack({ waitUntil: 'networkidle2' });
+    // 2) Lấy danh sách offers phù hợp
+    const offers = await page.$$eval(`${containerSelector} > div`, (divs) =>
+      divs
+        .map((div, i) => {
+          const aria = div.getAttribute('aria-label')?.trim() || '';
+          const a = div.querySelector('a');
+          if (
+            (aria === 'Offer not Completed' || aria === 'Offer is Completed') &&
+            a
+          ) {
+            return { idx: i + 1, aria, href: a.href, target: a.target };
           }
+        })
+        .filter(Boolean)
+    );
+    log(`▶️ Tìm thấy ${offers.length} offers có aria phù hợp`);
 
-          // Đợi panel render lại
-          await page.waitForSelector(containerSelector, { timeout: 10000 });
-          await delay(5000);
-        } else {
-          log(`⏭️ Offer child #${idx} đã hoàn thành, bỏ qua.`);
-        }
-      } catch (err) {
-        log(`⚠️ Bỏ qua child #${idx}: ${err.message}`);
+    // 3) Xử lý các offer chưa hoàn thành
+    for (const { idx, aria, href, target } of offers) {
+      log(`• Offer child #${idx}: aria-label="${aria}"`);
+      if (aria !== 'Offer not Completed') {
+        log(`⏭️ Offer #${idx} đã hoàn thành, bỏ qua.`);
+        continue;
       }
+
+      const linkSel = `${containerSelector} > div:nth-child(1) > a[href="${href}"]`;
+      await page.waitForSelector(linkSel, { timeout: 5000 });
+
+      if (target === '_blank') {
+        await page.click(linkSel);
+        const pages = await browser.pages();
+        const newTab = pages[pages.length - 1];
+        await delay(5000);
+        await newTab.close();
+        await page.bringToFront();
+        log(`🔒 Đã đóng tab mới: ${href}`);
+      } else {
+        await Promise.all([
+          page.waitForNavigation({ waitUntil: 'networkidle2' }),
+          page.click(linkSel),
+        ]);
+        log(`✅ Vào offer same-tab: ${href}`);
+        await delay(5000);
+        await page.goBack({ waitUntil: 'networkidle2' });
+      }
+
+      await page.waitForSelector(containerSelector, { timeout: 10000 });
+      await delay(5000);
     }
 
     log('🏁 Hoàn thành xử lý tất cả secondary offers');
